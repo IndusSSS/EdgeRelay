@@ -1,0 +1,60 @@
+# Multi-stage build for HTTPS-enabled production deployment
+FROM node:18-alpine AS build-stage
+
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+
+# Install dependencies
+RUN npm install
+
+# Copy source code
+COPY . .
+
+# Set environment variables for build - FORCE relative API paths
+ENV VITE_API_URL=/api
+ENV VITE_ADMIN_API_URL=/api
+
+# Build the application
+RUN npm run build
+
+# Production stage with Nginx and SSL support
+FROM nginx:alpine
+
+# Install OpenSSL and certbot for SSL certificates
+RUN apk add --no-cache openssl certbot certbot-nginx
+
+# Create directories for SSL and web content
+RUN mkdir -p /var/www/certbot /etc/letsencrypt/live/admin.navachar.com
+
+# Copy built application
+COPY --from=build-stage /app/dist /usr/share/nginx/html
+
+# Copy HTTPS Nginx configuration
+COPY nginx-https.conf /etc/nginx/nginx.conf
+
+# Create SSL certificate directory structure
+RUN mkdir -p /etc/letsencrypt/live/admin.navachar.com
+
+# Create self-signed certificate for initial setup (will be replaced by Let's Encrypt)
+RUN openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+    -keyout /etc/letsencrypt/live/admin.navachar.com/privkey.pem \
+    -out /etc/letsencrypt/live/admin.navachar.com/fullchain.pem \
+    -subj "/C=IN/ST=Karnataka/L=Bangalore/O=Navachar/OU=IT/CN=admin.navachar.com"
+
+# Set proper permissions
+RUN chown -R nginx:nginx /usr/share/nginx/html
+RUN chown -R nginx:nginx /var/www/certbot
+RUN chmod -R 755 /usr/share/nginx/html
+RUN chmod -R 755 /var/www/certbot
+
+# Expose ports
+EXPOSE 80 443
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost/ || exit 1
+
+# Start Nginx
+CMD ["nginx", "-g", "daemon off;"]

@@ -1,0 +1,55 @@
+# Multi-stage build for HTTPS-enabled EdgeRelay Admin Frontend
+# Configured for IP-based access: https://198.38.89.127:9006
+FROM node:18-alpine AS build-stage
+
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+
+# Install dependencies
+RUN npm ci --only=production
+
+# Copy source code
+COPY . .
+
+# Build the application
+RUN npm run build
+
+# Production stage with Nginx and SSL support
+FROM nginx:alpine
+
+# Install OpenSSL for SSL certificate generation
+RUN apk add --no-cache openssl
+
+# Create directories for SSL certificates
+RUN mkdir -p /etc/ssl/certs /etc/ssl/private
+
+# Copy built application
+COPY --from=build-stage /app/dist /usr/share/nginx/html
+
+# Copy HTTPS Nginx configuration for IP-based access
+COPY nginx-https-ip.conf /etc/nginx/nginx.conf
+
+# Generate self-signed SSL certificate for IP-based access
+RUN openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+    -keyout /etc/ssl/private/edgerelay-admin.key \
+    -out /etc/ssl/certs/edgerelay-admin.crt \
+    -subj "/C=US/ST=CA/L=San Francisco/O=EdgeRelay/OU=IT/CN=198.38.89.127" \
+    -addext "subjectAltName=IP:198.38.89.127"
+
+# Set proper permissions
+RUN chown -R nginx:nginx /usr/share/nginx/html
+RUN chmod -R 755 /usr/share/nginx/html
+RUN chmod 600 /etc/ssl/private/edgerelay-admin.key
+RUN chmod 644 /etc/ssl/certs/edgerelay-admin.crt
+
+# Expose ports
+EXPOSE 80 443
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost/nginx-health || exit 1
+
+# Start Nginx
+CMD ["nginx", "-g", "daemon off;"]
