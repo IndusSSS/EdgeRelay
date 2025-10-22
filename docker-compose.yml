@@ -1,0 +1,125 @@
+version: '3.8'
+
+networks:
+  edgerelay-network:
+    driver: bridge
+
+volumes:
+  edgerelay_postgres_data:
+    driver: local
+  edgerelay_redis_data:
+    driver: local
+  edgerelay_logs:
+    driver: local
+
+services:
+  # PostgreSQL Database
+  edgerelay-postgres:
+    image: postgres:15-alpine
+    container_name: edgerelay_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: edgerelay_db
+      POSTGRES_USER: edgerelay_user
+      POSTGRES_PASSWORD: EdgeRelay@Secure#2025!
+      TZ: Asia/Kolkata
+    ports:
+      - "9022:5432"
+    volumes:
+      - edgerelay_postgres_data:/var/lib/postgresql/data
+      - ./config/postgres/init:/docker-entrypoint-initdb.d
+    networks:
+      - edgerelay-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U edgerelay_user -d edgerelay_db"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # Redis Cache
+  edgerelay-redis:
+    image: redis:7-alpine
+    container_name: edgerelay_redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass EdgeRelay@Redis#2025!
+    ports:
+      - "9024:6379"
+    volumes:
+      - edgerelay_redis_data:/data
+    networks:
+      - edgerelay-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # MQTT Broker (Mosquitto)
+  edgerelay-mqtt:
+    image: eclipse-mosquitto:2.0
+    container_name: edgerelay_mqtt
+    restart: unless-stopped
+    ports:
+      - "9000:1883"
+      - "9001:8883"
+    volumes:
+      - ./config/mosquitto:/mosquitto/config
+      - ./config/mosquitto/data:/mosquitto/data
+      - ./config/mosquitto/log:/mosquitto/log
+    networks:
+      - edgerelay-network
+    healthcheck:
+      test: ["CMD", "mosquitto_pub", "-h", "localhost", "-t", "health-check", "-m", "test", "-q", "1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # EdgeRelay Core API Service
+  edgerelay-core-api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.core-api
+    container_name: edgerelay_core_api
+    restart: unless-stopped
+    ports:
+      - "9004:8000"  # HTTP API
+      - "9005:8001"  # HTTPS API (future)
+    environment:
+      ADMIN_DB_HOST: edgerelay-postgres
+      ADMIN_DB_PORT: 5432
+      ADMIN_DB_NAME: edgerelay_db
+      ADMIN_DB_USER: edgerelay_user
+      ADMIN_DB_PASSWORD: EdgeRelay@Secure#2025!
+      CLIENT_DB_HOST: edgerelay-postgres
+      CLIENT_DB_PORT: 5432
+      CLIENT_DB_NAME: edgerelay_db
+      CLIENT_DB_USER: edgerelay_user
+      CLIENT_DB_PASSWORD: EdgeRelay@Secure#2025!
+      REDIS_HOST: edgerelay-redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: EdgeRelay@Redis#2025!
+      MQTT_BROKER_HOST: edgerelay-mqtt
+      MQTT_BROKER_PORT: 1883
+      SECRET_KEY: EdgeRelay@JWT#Secret#2025!
+      ENVIRONMENT: development
+      TZ: Asia/Kolkata
+    volumes:
+      - ./services:/app
+      - ./config:/app/config
+      - edgerelay_logs:/app/logs
+    networks:
+      - edgerelay-network
+    depends_on:
+      edgerelay-postgres:
+        condition: service_healthy
+      edgerelay-redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
