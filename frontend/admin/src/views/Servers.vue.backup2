@@ -436,7 +436,7 @@
             </div>
 
             <!-- Cameras and Sensors Tables -->
-            <div class="space-y-8">
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
               <!-- Cameras Table -->
               <div>
                 <div class="flex items-center justify-between mb-4">
